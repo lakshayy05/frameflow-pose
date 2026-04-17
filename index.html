@@ -104,9 +104,17 @@ function sendToRN(landmarks) {
   }));
 }
 
+// Check if WebAssembly is supported
+if (typeof WebAssembly === 'undefined') {
+  statusEl.textContent = '❌ WebAssembly not supported';
+  statusEl.style.background = 'rgba(255,0,0,0.85)';
+}
+
 const pose = new Pose({
-  locateFile: (file) =>
-    'https://cdn.jsdelivr.net/npm/@mediapipe/pose/' + file
+  locateFile: (file) => {
+    statusEl.textContent = 'Loading: ' + file;
+    return 'https://cdn.jsdelivr.net/npm/@mediapipe/pose/' + file;
+  }
 });
 
 pose.setOptions({
@@ -175,6 +183,11 @@ window.addEventListener('message', (e) => {
 
 // Start with front camera
 startCamera('user');
+  // Global error catcher
+window.onerror = (msg, src, line, col, err) => {
+  statusEl.textContent = '❌ ' + msg;
+  statusEl.style.background = 'rgba(255,0,0,0.85)';
+};
 </script>
 </body>
 </html>
