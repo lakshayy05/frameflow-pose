@@ -1,0 +1,180 @@
+<!DOCTYPE html>
+<html>
+<head>
+  <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0">
+  <style>
+    * { margin: 0; padding: 0; box-sizing: border-box; }
+    body { background: #000; overflow: hidden; }
+    #container { position: relative; width: 100vw; height: 100vh; }
+    video {
+      position: absolute; width: 100%; height: 100%;
+      object-fit: cover; transform: scaleX(-1);
+    }
+    canvas {
+      position: absolute; width: 100%; height: 100%;
+      object-fit: cover; transform: scaleX(-1);
+    }
+    #status {
+      position: absolute; top: 20px; left: 50%;
+      transform: translateX(-50%);
+      background: rgba(108,99,255,0.85);
+      color: white; padding: 8px 18px;
+      border-radius: 20px; font-size: 14px;
+      font-family: sans-serif; z-index: 10;
+      white-space: nowrap;
+    }
+  </style>
+</head>
+<body>
+<div id="container">
+  <video id="video" autoplay playsinline muted></video>
+  <canvas id="canvas"></canvas>
+  <div id="status">Loading pose model...</div>
+</div>
+
+<script src="https://cdn.jsdelivr.net/npm/@mediapipe/pose/pose.js"></script>
+<script src="https://cdn.jsdelivr.net/npm/@mediapipe/camera_utils/camera_utils.js"></script>
+<script src="https://cdn.jsdelivr.net/npm/@mediapipe/drawing_utils/drawing_utils.js"></script>
+
+<script>
+const video = document.getElementById('video');
+const canvas = document.getElementById('canvas');
+const ctx = canvas.getContext('2d');
+const statusEl = document.getElementById('status');
+
+let currentFacingMode = 'user';
+
+function resizeCanvas() {
+  canvas.width = window.innerWidth;
+  canvas.height = window.innerHeight;
+}
+resizeCanvas();
+window.addEventListener('resize', resizeCanvas);
+
+const POSE_CONNECTIONS = [
+  [11,12],[11,13],[13,15],[12,14],[14,16],
+  [11,23],[12,24],[23,24],
+  [23,25],[25,27],[24,26],[26,28],
+  [0,1],[1,2],[2,3],[3,7],[0,4],[4,5],[5,6],[6,8],
+];
+
+function drawSkeleton(landmarks) {
+  const w = canvas.width;
+  const h = canvas.height;
+
+  ctx.save();
+  ctx.setLineDash([6, 5]);
+  ctx.lineWidth = 2.5;
+  ctx.strokeStyle = 'rgba(108, 99, 255, 0.85)';
+
+  for (const [a, b] of POSE_CONNECTIONS) {
+    const ptA = landmarks[a];
+    const ptB = landmarks[b];
+    if (ptA.visibility > 0.5 && ptB.visibility > 0.5) {
+      ctx.beginPath();
+      ctx.moveTo(ptA.x * w, ptA.y * h);
+      ctx.lineTo(ptB.x * w, ptB.y * h);
+      ctx.stroke();
+    }
+  }
+  ctx.restore();
+
+  for (const pt of landmarks) {
+    if (pt.visibility > 0.5) {
+      ctx.beginPath();
+      ctx.arc(pt.x * w, pt.y * h, 5, 0, 2 * Math.PI);
+      ctx.fillStyle = '#ffffff';
+      ctx.fill();
+      ctx.strokeStyle = '#6C63FF';
+      ctx.lineWidth = 2;
+      ctx.stroke();
+    }
+  }
+}
+
+function sendToRN(landmarks) {
+  const simplified = landmarks.map(p => ({
+    x: parseFloat(p.x.toFixed(3)),
+    y: parseFloat(p.y.toFixed(3)),
+    v: parseFloat((p.visibility || 0).toFixed(2))
+  }));
+  window.ReactNativeWebView?.postMessage(JSON.stringify({
+    type: 'pose',
+    landmarks: simplified
+  }));
+}
+
+const pose = new Pose({
+  locateFile: (file) =>
+    'https://cdn.jsdelivr.net/npm/@mediapipe/pose/' + file
+});
+
+pose.setOptions({
+  modelComplexity: 1,
+  smoothLandmarks: true,
+  enableSegmentation: false,
+  minDetectionConfidence: 0.5,
+  minTrackingConfidence: 0.5,
+});
+
+pose.onResults((results) => {
+  ctx.clearRect(0, 0, canvas.width, canvas.height);
+  if (results.poseLandmarks) {
+    drawSkeleton(results.poseLandmarks);
+    sendToRN(results.poseLandmarks);
+    statusEl.textContent = '🦴 Pose detected';
+    statusEl.style.background = 'rgba(76, 175, 80, 0.85)';
+  } else {
+    statusEl.textContent = '👀 Looking for pose...';
+    statusEl.style.background = 'rgba(108,99,255,0.85)';
+  }
+});
+
+let currentStream = null;
+let animFrameId = null;
+
+async function startCamera(facingMode = 'user') {
+  if (currentStream) {
+    currentStream.getTracks().forEach(t => t.stop());
+  }
+  if (animFrameId) cancelAnimationFrame(animFrameId);
+
+  try {
+    const stream = await navigator.mediaDevices.getUserMedia({
+      video: { facingMode, width: 640, height: 480 },
+      audio: false
+    });
+    currentStream = stream;
+    video.srcObject = stream;
+    video.onloadedmetadata = () => {
+      video.play();
+      statusEl.textContent = '👀 Looking for pose...';
+      const processFrame = async () => {
+        if (!video.paused && !video.ended) {
+          await pose.send({ image: video });
+        }
+        animFrameId = requestAnimationFrame(processFrame);
+      };
+      processFrame();
+    };
+  } catch (err) {
+    statusEl.textContent = 'Camera error: ' + err.message;
+  }
+}
+
+// Listen for flip command from React Native
+window.addEventListener('message', (e) => {
+  try {
+    const msg = JSON.parse(e.data);
+    if (msg.type === 'flip') {
+      currentFacingMode = currentFacingMode === 'user' ? 'environment' : 'user';
+      startCamera(currentFacingMode);
+    }
+  } catch(err) {}
+});
+
+// Start with front camera
+startCamera('user');
+</script>
+</body>
+</html>
